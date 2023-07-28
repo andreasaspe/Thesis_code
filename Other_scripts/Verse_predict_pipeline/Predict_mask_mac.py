@@ -1,0 +1,772 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Sun Jul  9 17:22:14 2023
+
+@author: andreasaspe
+"""
+
+#General imports
+import os
+import sys
+from torch.utils.data import DataLoader
+import torch
+import torch.optim as optim
+import numpy as np
+import matplotlib.pyplot as plt
+from os import listdir
+import nibabel as nib
+import importlib
+import pickle
+from tqdm import tqdm
+import pandas as pd
+from copy import deepcopy
+import copy
+#My own documents
+from my_plotting_functions import *
+from my_data_utils import *
+from data_utilities import *
+#Import networks
+from SpineLocalisationNet import SpineLocalisationNet
+# from new_VertebraeLocalisationNet import VertebraeLocalisationNet
+from new_VertebraeLocalisationNet_batchnormdropout import VertebraeLocalisationNet
+from VertebraeSegmentationNet import VertebraeSegmentationNet
+# from VertebraeSegmentationNet_batchnormdropout import VertebraeSegmentationNet
+
+#######################################################
+#################### CONTROL PANEL ####################
+#######################################################
+#Define scans
+all_scans = 0
+list_of_subjects = ['sub-verse809','sub-verse620','sub-verse813']
+
+#Stage 1 information
+# The best case is sub-verse810 which has a iou of 0.96
+# The median case is sub-verse582 which has a iou of 0.85
+# The worst case is sub-verse590 which has a iou of 0.69
+
+#Stage 2
+#OLD information
+# The best case is sub-verse613
+# The median case is sub-verse551
+# The worst case is sub-verse502
+#New information
+# The best case is sub-verse809 which has an average distance of 0.70
+# The median case is sub-verse620 which has an average distance of 1.38
+# The worst case is sub-verse813 which has an average distance of 2.53
+
+
+
+
+# 555
+# skriv hvornår certebraelocalisationnet fucker op
+
+# VERTEBRAE_FRACTURE_0285_SERIES0015 går den her lidt galt i SpineLocalisation?
+
+do_batchnorm = 1
+data_type = 'test'
+
+#Define directories MAC
+dir_data_original = '/Users/andreasaspe/Documents/Data/Verse20/Verse20_'+data_type+'_unpacked'
+dir_data_stage1 = '/Users/andreasaspe/Documents/Data/Verse20/SpineLocalisation/Verse20_'+data_type+'_prep_NOPADDING' #'/zhome/bb/f/127616/Documents/Thesis/Rawdata_training'
+dir_data_stage2 = '/Users/andreasaspe/Documents/Data/Verse20/VertebraeLocalisation2/Verse20_'+data_type+'_prep_NOPADDING' #'/zhome/bb/f/127616/Documents/Thesis/Rawdata_training'
+dir_data_stage3 = '/Users/andreasaspe/Documents/Data/Verse20/VertebraeSegmentation/Verse20_'+data_type+'_prep_NOPADDING' #'/zhome/bb/f/127616/Documents/Thesis/Rawdata_training'
+predictions_folder = '/Users/andreasaspe/Documents/Data/Verse20/Predictions_from_titans'
+predictions_dataframe_folder = '/Users/andreasaspe/Documents/Data/Verse20/Predictions_dataframe'
+dir_segmentations = '/Users/andreasaspe/Documents/Data/Verse20/Predictions_segmentations'
+
+
+#Define directories
+# dir_data_original = '/scratch/s174197/data/Verse20/Verse20_'+data_type+'_unpacked_cropped'
+# dir_data_stage1 = '/scratch/s174197/data/Verse20/SpineLocalisation/Verse20_'+data_type+'_prep_NOPADDING_cropped' #'/zhome/bb/f/127616/Documents/Thesis/Rawdata_training'
+# dir_data_stage2 = '/scratch/s174197/data/Verse20/VertebraeLocalisation2/Verse20_'+data_type+'_prep_NOPADDING_cropped' #'/zhome/bb/f/127616/Documents/Thesis/Rawdata_training'
+# dir_data_stage3 = '/scratch/s174197/data/Verse20/VertebraeSegmentation/Verse20_'+data_type+'_prep_NOPADDING_cropped' #'/zhome/bb/f/127616/Documents/Thesis/Rawdata_training'
+# checkpoint_dir_stage1 = '/scratch/s174197/data/Checkpoints/SpineLocalisation/First_try2950_batchsize1_lr0.0001_wd0.0005.pth' #r'E:\Andreas_s174197\Thesis\My_code\My_networks\Spine_Localisation\Checkpoints\checkpoint_batchsize1_lr0.0001_wd0.0005.pth'
+# if do_batchnorm == 1:
+#     checkpoint_dir_stage2 = '/scratch/s174197/data/Checkpoints/VertebraeLocalisation2/Batchnorm_dropout_batchsize1_lr1e-05_wd0.0001.pth'
+# else:
+#     checkpoint_dir_stage2 = '/scratch/s174197/data/Checkpoints/VertebraeLocalisation2/First_try/First_try_epoch430_batchsize1_lr1e-05_wd0.0001.pth'
+# checkpoint_dir_stage3 = '/scratch/s174197/data/Checkpoints/VertebraeSegmentation/Only_rotation_batchsize1_lr1e-05_wd0.0005.pth'
+# predictions_folder = '/scratch/s174197/data/Verse20/Predictions'
+
+#Define rescale and reorientation parameters
+New_orientation = ('L', 'A', 'S')
+New_voxel_size = 8 # [mm]
+
+#For stage 2
+dim1_new = 96
+dim2_new = 96
+dim3_new = 128
+pad_value = -1
+#######################################################
+#######################################################
+#######################################################
+
+
+#Define rest of data folders
+dir_stage1_img = os.path.join(dir_data_stage1,'img')
+dir_stage1_ctd = os.path.join(dir_data_stage1,'ctd')
+
+dir_stage2_img = os.path.join(dir_data_stage2,'img')
+dir_stage2_ctd = os.path.join(dir_data_stage2,'ctd')
+
+dir_stage3_img = os.path.join(dir_data_stage3,'img')
+dir_stage3_msk = os.path.join(dir_data_stage3,'msk')
+dir_stage3_heatmaps = os.path.join(dir_data_stage3,'heatmaps')
+
+
+
+#Create outputfolders if they dont exist
+dir_pred_stage1 = os.path.join(predictions_folder,'SpineLocalisation',data_type)
+if do_batchnorm == 0:
+    dir_pred_stage2 = os.path.join(predictions_folder,'VertebraeLocalisation2',data_type)
+    dir_pred_stage3 = os.path.join(predictions_folder,'VertebraeSegmentation',data_type)
+else:
+    dir_pred_stage2 = os.path.join(predictions_folder,'VertebraeLocalisation2_batchnorm',data_type)
+    dir_pred_stage3 = os.path.join(predictions_folder,'VertebraeSegmentation_batchnorm',data_type)
+
+dir_predictions_dataframe_folder = os.path.join('/Users/andreasaspe/Documents/Data/Verse20/Predictions_dataframe',data_type)
+dir_segmentations = os.path.join(dir_segmentations,data_type)
+
+if not os.path.exists(dir_pred_stage1):
+    os.makedirs(dir_pred_stage1)
+if not os.path.exists(dir_pred_stage2):
+    os.makedirs(dir_pred_stage2)
+if not os.path.exists(dir_pred_stage3):
+    os.makedirs(dir_pred_stage3)
+if not os.path.exists(dir_segmentations):
+    os.makedirs(dir_segmentations)
+
+
+#Define list of scans
+if all_scans:
+    all_subjects = []
+    for filename in listdir(dir_stage1_img):
+        subject = filename.split("_")[0]
+        #if subject.find('verse') != -1: #PLOTTER KUN VERSE. IKKE GL
+        all_subjects.append(subject)
+    all_subjects = np.unique(all_subjects)
+    #Sorterer fil '.DS' fra
+    all_subjects = all_subjects[all_subjects != '.DS']
+    all_subjects = all_subjects.tolist()
+else:
+    all_subjects = list_of_subjects
+
+
+#For stage 1
+subject_data = []
+mse_data = []
+iou_list = []
+
+#For stage 2
+subject_data = []
+distances_list = []
+avg_dist_list = []
+
+    
+
+for counter, subject in enumerate(tqdm(all_subjects)):  
+    
+    print()
+    print()
+    print(subject)
+    print()
+    print()
+    
+
+    ################ Load original image ################
+    filename_img = [f for f in listdir(dir_data_original) if (f.startswith(subject) and f.endswith('img.nii.gz'))][0]
+    img_nib_original = nib.load(os.path.join(dir_data_original,filename_img))
+    img_nib_original = reorient_to(img_nib_original, axcodes_to=New_orientation) #REORIENT. KEEP, REALLY IMPORTANT! ELLERS FUCKER ZOOMS OP OG SÅ FUCKER RESCALING OP VED BOUNDING BOX!
+    # data_original = np.asanyarray(img_nib_original.dataobj, dtype=np.float32) #Maybe remove?
+    # show_slices_dim1(data_original,subject,convert = 1, no_slices=60)
+    # show_slices_dim2(data_original,subject,convert = 1, no_slices=60)
+    # show_slices_dim3(data_original,subject,convert = 1, no_slices=60)
+    # break
+
+    #Define zooms and shape
+    original_zooms = img_nib_original.header.get_zooms()
+    original_shape = img_nib_original.header.get_data_shape()
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    #############################################################
+    ########################## STAGE 1 ##########################
+    #############################################################
+    filename_img = subject + "_img.nii.gz"
+    img_nib = nib.load(os.path.join(dir_stage1_img,filename_img))
+    data_img = np.asanyarray(img_nib.dataobj, dtype=np.float32)
+    
+    
+    # show_slices_dim1(data_img,subject)
+        
+    #Do padding
+    data_img, restrictions = center_and_pad(data=data_img, new_dim=(64,64,128), pad_value=-1)
+
+
+
+
+
+
+
+    ########################## Create GT ##########################
+    # Define file names
+    filename_ctd = [f for f in listdir(dir_stage1_ctd) if (f.startswith(subject) and f.endswith('json'))][0]
+    # Load files
+    ctd_list_GT = load_centroids(os.path.join(os.path.join(dir_stage1_ctd,filename_ctd)))
+    
+    #Apply transformation to centroids
+    for i in range(len(ctd_list_GT)-1):
+        ctd_list_GT[i+1][1] += restrictions[0]
+        ctd_list_GT[i+1][2] += restrictions[2]
+        ctd_list_GT[i+1][3] += restrictions[4]
+    
+    #Sigma
+    sigma = 3
+    
+    #Get data shape
+    dim1, dim2, dim3 =  data_img.shape
+
+    heatmap = np.zeros((dim1,dim2,dim3)) #UNCOMMENT IF YOU WANT SUM
+    
+    #Calculate heatmap
+    for v in ctd_list_GT[1:]:
+        new_heatmap = gaussian_kernel_3d_new(origins = (v[1],v[2],v[3]), meshgrid_dim = (dim1,dim2,dim3), gamma=1, sigma = 3)
+        new_heatmap = (new_heatmap - new_heatmap.min()) / (new_heatmap.max() - new_heatmap.min())
+        heatmap += new_heatmap #UNCOMMENT IF YOU WANT SUM
+        #heatmaps_list.append(new_heatmap) #UNCOMMENT IF YOU WANT MAXMIMUM
+    
+    #heatmap = reduce(np.maximum,heatmaps_list) #UNCOMMENT IF YOU WANT MAXIMUM *heatmaps_list
+                
+    #Normalise heatmap
+    heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min())
+    
+    #Thresholding
+    heatmap[heatmap < 0.001] = 0
+    
+    # show_heatmap_img_dim1(data_img,heatmap,subject,alpha=0.1)
+    #############################################################
+
+
+    
+    # show_slices_dim1(data_img,subject)
+    # break
+    
+
+    data_img = torch.from_numpy(data_img)
+    data_img = data_img.unsqueeze(0) 
+    data_img = data_img.unsqueeze(0)
+    
+    #Load predictions
+    img_predictions = nib.load(os.path.join(dir_pred_stage1,subject+'_prediction.nii.gz'))
+    predictions = np.asanyarray(img_predictions.dataobj, dtype=np.float32)
+    
+    # Calculate the MSE loss
+    mse = MSEloss(heatmap, predictions)
+    
+    #Append to list
+    subject_data.append(subject)
+    mse_data.append(mse)
+    
+    # show_heatmap_img_dim1(data_img.squeeze(0,1).cpu().detach().numpy(),predictions,subject,alpha=0.1)
+
+    #Normalise
+    predictions = (predictions - predictions.min()) / (predictions.max() - predictions.min())
+    
+    # show_heatmap_img_dim1(data_img.squeeze(0,1).cpu().detach().numpy(),predictions,subject)
+    # break
+
+    #Calculate bounding box    
+    bb_coordinates, COM = BoundingBox(predictions,restrictions)
+    # continue
+    bb_coordinates_GT, COM = BoundingBox(heatmap,restrictions)
+    
+    iou = calculate_iou(bb_coordinates,bb_coordinates_GT)
+    iou_list.append(iou)
+    
+    #Normal format
+    data_img = data_img.squeeze(0,1).cpu().detach().numpy()
+
+    # show_slices_dim1(data_img,no_slices=40)
+    # show_heatmap_img_dim1(data_img,predictions,subject,no_slices=40)
+    # show_boundingbox_dim1(data_img,bb_coordinates, subject,convert = 0,no_slices=40)
+    # break
+    # show_boundingbox_dim2(data_img,bb_coordinates,subject,convert = 0)
+    # show_boundingbox_dim3(data_img,bb_coordinates,subject,convert = 0)
+    
+    # show_boundingboxes_dim1(data_img, bb_coordinates, bb_coordinates_GT, subject)
+    # show_boundingboxes_dim2(data_img, bb_coordinates, bb_coordinates_GT, subject)
+    # show_boundingboxes_dim3(data_img, bb_coordinates, bb_coordinates_GT, subject)
+    # continue
+    
+    
+#Spinal bounding box evaluation
+# df_stage1 = pd.DataFrame({'subjects': subject_data, 'mse': mse_data,'iou':iou_list})
+# df_stage1 = df_stage1.sort_values(by='mse', ascending=True)
+# df_stage1.to_csv(os.path.join(dir_predictions_dataframe_folder,'df_stage1_training.csv'), index=False)
+
+    
+
+    #Define zooms
+    old_zooms = (8,8,8)
+    new_zooms = original_zooms
+    #Rescale bounding box
+    original_bb_coordinates, original_COM = RescaleBoundingBox(new_zooms,old_zooms,bb_coordinates,COM,restrictions,borders=original_shape)
+    
+    #Make sure that bounding box coordinates goes all the way up and down on the z-axis
+    # original_bb_coordinates[4] = 0
+    # original_bb_coordinates[5] = data_original.shape[2]
+    
+    # show_boundingbox_dim1(data_original,original_bb_coordinates,subject,convert=1,zooms=original_zooms,no_slices=100)
+
+    #Rescale again
+    new_zooms = (2,2,2)
+    old_zooms = original_zooms
+    new_bb_coordinates, new_COM = RescaleBoundingBox(new_zooms,old_zooms,original_bb_coordinates,original_COM)
+
+
+
+
+
+
+
+
+
+
+
+
+
+    #############################################################
+    ########################## STAGE 2 ##########################
+    #############################################################
+    #Load data for stage 2
+    filename_img = subject + "_img.nii.gz"
+    img_nib = nib.load(os.path.join(dir_stage2_img,filename_img))
+    data_img = np.asanyarray(img_nib.dataobj, dtype=np.float32)
+    
+    #Shape
+    dim1, dim2, dim3 = data_img.shape
+    
+    
+    #Crop from BOUNDING BOX
+    x_min, x_max, y_min, y_max, z_min, z_max = new_bb_coordinates
+    x_min = max(0,np.round(x_min).astype(int))
+    x_max = min(np.round(x_max).astype(int),dim1-1)
+    y_min = max(0,np.round(y_min).astype(int))
+    y_max = min(np.round(y_max).astype(int),dim2-1)
+    z_min = max(0,np.round(z_min).astype(int))
+    z_max = min(np.round(z_max).astype(int),dim3-1)
+    x_range = [x_min,x_max]
+    y_range = [y_min,y_max]
+    z_range = [z_min,z_max]
+    data_img = data_img[x_range[0]:x_range[1]+1,y_range[0]:y_range[1]+1,z_range[0]:z_range[1]+1]
+    
+    #Crop from COM
+    # new_x_COM, new_y_COM, new_z_COM = new_COM
+    # new_x_COM = np.round(new_x_COM).astype(int)
+    # new_y_COM = np.round(new_y_COM).astype(int)
+    # new_z_COM = np.round(new_z_COM).astype(int)
+    # dim1, dim2, dim3 = data_img.shape
+    # x_range = [max(new_x_COM-48,0),min(new_x_COM+48,dim1)]
+    # y_range = [max(new_y_COM-48,0),min(new_y_COM+48,dim2)]
+    # z_range = [0,0]
+    # data_img = data_img[x_range[0]:x_range[1],y_range[0]:y_range[1],:]
+
+    #Do padding
+    data_img, restrictions = center_and_pad(data=data_img, new_dim=(96,96,128), pad_value=-1)
+    #Update restrictions for above cropping
+    restrictions = tuple(restrictions - np.array([x_min,x_max,y_min,y_max,z_min,z_max]))
+    
+    
+    
+    
+    
+    ########################## Create GT ##########################
+    # LOAD FILES
+    filename_ctd = subject + '_ctd.json'
+
+    # Load files
+    ctd_list_GT = load_centroids(os.path.join(os.path.join(dir_stage2_ctd,filename_ctd)))
+    
+    #Apply transformation to centroids
+    for i in range(len(ctd_list_GT)-1):
+        ctd_list_GT[i+1][1] += restrictions[0]
+        ctd_list_GT[i+1][2] += restrictions[2]
+        ctd_list_GT[i+1][3] += restrictions[4]
+    
+    #Get data shape
+    dim1, dim2, dim3 =  data_img.shape
+
+    # heatmap = np.zeros((dim1, dim2, dim3)) #UNCOMMENT IF YOU WANT SUM
+    heatmaps_list = [] #UNCOMMENT IF YOU WANT MAXIMUM
+    #Loop through centroids
+    for ctd in ctd_list_GT[1:]:
+        if 17 <= ctd[0] <= 24:
+            new_heatmap = gaussian_kernel_3d_new(origins = (ctd[1],ctd[2],ctd[3]), meshgrid_dim = (dim1,dim2,dim3), gamma=1, sigma = sigma)
+            new_heatmap = (new_heatmap - new_heatmap.min()) / (new_heatmap.max() - new_heatmap.min())
+            # heatmap += new_heatmap #UNCOMMENT IF YOU WANT SUM
+            heatmaps_list.append(new_heatmap) #UNCOMMENT IF YOU WANT MAXMIMUM
+    
+    heatmap = reduce(np.maximum,heatmaps_list) #UNCOMMENT IF YOU WANT MAXIMUM *heatmaps_list
+    
+    #Thresholding
+    heatmap[heatmap < 0.001] = 0
+    
+    # show_heatmap_img_dim1(data_img,heatmap,subject)
+    #############################################################
+    
+    
+    
+    
+    
+    
+    # show_slices_dim1(data_img,subject)
+    # continue
+    
+    
+
+    #Load predictions
+    img_predictions = nib.load(os.path.join(dir_pred_stage2,subject+'_prediction.nii.gz'))
+    predictions = np.asanyarray(img_predictions.dataobj, dtype=np.float32)
+
+    # show_heatmap_img_dim1(data_img,predictions,subject,alpha=0.1,no_slices = 40)
+    # show_heatmap_dim1(predictions,subject,alpha=0.1,no_slices = 40)
+    
+    
+    #Find centroids
+    ctd_list_pred = find_centroids2(predictions)
+    # ctd_list_pred = find_centroids3(predictions)
+
+    
+    #Plot to find discrepances
+    # show_centroids_mapping_dim1(data_img,ctd_list_GT,ctd_list_pred,subject,text=1,markersize=2,no_slices=5)
+    # continue
+
+    #Get mapping
+    list_of_visible_vertebrae = mapping_Verse[subject]
+    
+    #Convert to verse format from mapping
+    ctd_list_pred = centroids_to_verse(ctd_list_pred,list_of_visible_vertebrae)
+   
+    
+    #Check if mapping was made correct!
+    show_centroids_comparison_dim1(data_img,ctd_list_GT,ctd_list_pred,subject,text=1,markersize=2,no_slices=2)
+
+
+    #Filter centroids
+    ctd_list_pred = filter_T10_to_L5(ctd_list_pred)
+    ctd_list_GT = filter_T10_to_L5(ctd_list_GT)
+    
+    distances = Calculate_distances(ctd_list_GT,ctd_list_pred)
+    
+    # show_centroids_dim1(data_img, ctd_list_pred, subject, text = 1, markersize=3)
+    # show_centroids_dim2(data_img, ctd_list_pred, subject, text = 1, markersize=3)
+    # show_centroids_dim3(data_img, ctd_list_pred, subject, text = 1, markersize=3)
+    # show_centroids_comparison_dim1(data_img,ctd_list_GT,ctd_list_pred,subject,text=1,markersize=2,no_slices=40) MÆRKELIG KODE? Ved ikke hvad den her gør?
+    # show_centroids_comparison_toreport_dim1(data_img,ctd_list_GT,ctd_list_pred,subject,text=1,markersize=1.5,no_slices=100)
+
+    
+    # show_slices_dim1(data_img,subject)
+    
+    #TO REPORT
+    dim1,dim2,dim3 = data_img.shape
+    data_img_temp = deepcopy(data_img)
+    ctd_list_pred_temp = deepcopy(ctd_list_pred)
+    ctd_list_GT_temp = deepcopy(ctd_list_GT)
+    #Crop z-axis according to centroids.
+    for ctd in ctd_list_pred_temp[1:]:
+        if ctd[0] == 24:
+            lowest_z_voxel = ctd[3]
+        if ctd[0] == 17:
+            highest_z_voxel = ctd[3]
+
+    lowest_z_voxel_cropped = int(np.round(lowest_z_voxel-20))
+    highest_z_voxel_cropped = lowest_z_voxel_cropped+170
+    # highest_z_voxel_cropped = int(np.round(highest_z_voxel+20))
+    
+    if lowest_z_voxel_cropped < 0:
+        lowest_z_voxel_cropped = 0
+    if highest_z_voxel_cropped > (dim3-1):
+        highest_z_voxel_cropped = dim3-1
+
+    #CROP
+    data_img_temp = data_img_temp[:,:,lowest_z_voxel_cropped:highest_z_voxel_cropped+1]
+    data_img_temp, restrictions_temp = center_and_pad(data=data_img_temp, new_dim=(96,96,171), pad_value=-1)
+
+    
+    #Apply transformation to GT
+    for i in range(len(ctd_list_pred_temp)-1):
+        ctd_list_pred_temp[i+1][1] += restrictions_temp[0]
+        ctd_list_pred_temp[i+1][2] += restrictions_temp[2]
+        ctd_list_pred_temp[i+1][3] += restrictions_temp[4] - lowest_z_voxel_cropped
+    #Apply transformation to predictions
+    for i in range(len(ctd_list_GT_temp)-1):
+        ctd_list_GT_temp[i+1][1] += restrictions_temp[0]
+        ctd_list_GT_temp[i+1][2] += restrictions_temp[2]
+        ctd_list_GT_temp[i+1][3] += restrictions_temp[4] - lowest_z_voxel_cropped
+        
+    # show_centroids_comparison_toreport_dim1(data_img_temp,ctd_list_GT_temp,ctd_list_pred_temp,subject,text=1,markersize=1.5,no_slices=40)
+    
+    continue
+    
+
+    #Append to list
+#     subject_data.append(subject)
+#     distances_list.append(distances)
+#     avg_dist_list.append(np.nanmean(distances))
+
+
+# column_names = ['L5','L4','L3','L2','L1','T12','T11','T10']
+
+# df_stage2 = pd.DataFrame(distances_list, columns=column_names)
+# df_stage2.insert(0, 'Average distance', avg_dist_list)
+# df_stage2.insert(0, 'subjects', all_subjects)
+# df_stage2.to_csv(os.path.join(dir_predictions_dataframe_folder,'df_stage2_elastic.csv'), index=False)
+
+    
+    
+    
+
+    #############################################################
+    ########################## STAGE 3 ##########################
+    #############################################################
+    #Load data
+    filename_img = subject + "_img.nii.gz"
+    img_nib = nib.load(os.path.join(dir_stage3_img,filename_img))
+    data_img = np.asanyarray(img_nib.dataobj, dtype=np.float32)
+    dim1,dim2,dim3 = data_img.shape
+    
+    ########################## LOAD GT ##########################
+    # LOAD FILES
+    filename_msk = subject + "_msk.nii.gz"
+    msk_nib = nib.load(os.path.join(dir_stage3_msk,filename_msk))
+    data_msk = np.asanyarray(msk_nib.dataobj, dtype=np.float32)
+
+
+
+
+    #############################################################
+    
+
+    
+    #Rescale centroids
+    new_zooms = original_zooms
+    old_zooms = (2,2,2)
+    ctd_list_pred = RescaleCentroids_verse(new_zooms, old_zooms, ctd_list_pred, restrictions)
+    #Rescale to (1,1,1)
+    old_zooms = original_zooms
+    new_zooms = (1,1,1)
+    ctd_list_pred = RescaleCentroids_verse(new_zooms, old_zooms, ctd_list_pred)
+    
+    # show_centroids_new_dim1(data_img,ctd_list,subject,markersize=5)
+    # show_centroids_new_dim1(img_nib_original.get_fdata(),(2,2,2),ctd_list,subject)
+    # show_centroids_new_dim2(img_nib_original.get_fdata(),(2,2,2),ctd_list,subject)
+    # show_centroids_new_dim3(img_nib_original.get_fdata(),(2,2,2),ctd_list,subject)
+    # continue
+    
+  
+    vs = original_zooms
+    
+
+    idx = 1
+    full_output_image = np.zeros((dim1,dim2,dim3))
+    full_output_list = []
+    v_number_list = []
+    for ctd in ctd_list_pred[1:]:
+        v_number = int(ctd[0])
+        v_name = number_to_name[v_number]
+        print(v_name)
+        centroid = np.array([ctd[1],ctd[2],ctd[3]])
+        full_output_temp = np.zeros((dim1,dim2,dim3))
+        #img
+        data_img_cropped, restrictions = center_and_pad(data=data_img, new_dim=(128,128,96), pad_value=-1,centroid=tuple(centroid))
+        #msk
+        data_msk_cropped, restrictions = center_and_pad(data=data_msk, new_dim=(128,128,96), pad_value=-1,centroid=tuple(centroid))
+        #Change centroid coordinate based on above cropping and padding
+        x_min_restrict, _, y_min_restrict, _, z_min_restrict, _ = restrictions #OBS. x_max, y_max og z_max kan kun bruges ved bounding box!! Man skal tage trække padding og cropping fra først og SÅ kan man lægge dimensionen til. Der bliver en parantes fejl ellers.
+        centroid = centroid + np.array([x_min_restrict,y_min_restrict,z_min_restrict]) #PLUS, because we are applying changes. Not reverting.
+
+        #Create heatmap
+        heatmap = gaussian_kernel_3d_new(origins=tuple(centroid), meshgrid_dim=(128,128,96), gamma=1, sigma=5)
+        #Normalize
+        heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min())
+        
+        #Thresholding
+        heatmap[heatmap < 0.001] = 0
+        
+        #print("Plot")
+        # show_heatmap_img_dim1(data_img_cropped, heatmap, v_name)
+        # break
+        
+        #Prepare data for network 3
+
+
+        #Input tensor
+        inputs = np.stack((data_img_cropped, heatmap), axis=3)
+        #Reshape
+        inputs = np.moveaxis(inputs, -1, 0)
+        inputs = inputs.astype(np.float32)
+        
+        
+        inputs = torch.from_numpy(inputs)
+        inputs = inputs.unsqueeze(0) 
+
+        #Define sigmoid function
+        sigmoid = nn.Sigmoid()
+        
+        #Load predictions
+        img_predictions = nib.load(os.path.join(dir_pred_stage3, subject+'_prediction_'+v_name+'.nii.gz'))
+        predictions = np.asanyarray(img_predictions.dataobj, dtype=np.float32)
+        
+        # show_mask_img_dim1(data_img_cropped,predictions, subject+"_"+v_name)
+        # show_slices_dim1(data_msk_cropped,subject)
+        # data_cropped_temp = np.where(data_msk_cropped == v_number,1,0)
+        # show_mask_img_dim1(data_img_cropped,data_msk_cropped, subject+"_"+v_name)
+    
+        # idx += 1
+
+
+
+        #print("Plot")
+        # show_mask_dim1(predictions, str(idx))
+        # show_mask_img_dim1(data_img_cropped,predictions, str(idx))
+        
+        #Save each vertebra
+        # nifti_image = nib.Nifti1Image(predictions.astype(np.float32), new_affine) #img_nib.affine)# random_affine) #img_nib.affine) #DEFINE ANOTHER AFFINE!
+        # nib.save(nifti_image, os.path.join(predictions_folder, subject+'_V'+str(idx)+'.nii.gz'))
+        
+        ranges = [-x_min_restrict,-x_min_restrict+127,-y_min_restrict,-y_min_restrict+127,-z_min_restrict,-z_min_restrict+95] #MINUS TO EVERYTHING because we are going backwards. Not applying padding or cropping but reverting!
+
+        
+        limX1 = 0
+        limX2 = 127
+        limY1 = 0
+        limY2 = 127
+        limZ1 = 0
+        limZ2 = 95
+        
+        if ranges[0] < 0:
+            #Define offset for cropping mask
+            limX1 = abs(ranges[0])
+            #Set indices for full image
+            ranges[0] = 0
+                        
+        if ranges[1] > dim1-1:
+            #Define offset for cropping mask
+            cut_off = ranges[1]-(dim1-1)
+            limX2 = 127 - cut_off
+            #Set indices for full image
+            ranges[1] = dim1-1
+
+        if ranges[2] < 0:
+            #Define offset for cropping mask
+            limY1 = abs(ranges[2])
+            #Set indices for full image
+            ranges[2] = 0
+ 
+        if ranges[3] > dim2-1:
+            #Define offset for cropping mask
+            cut_off = ranges[3]-(dim2-1)
+            limY2 = 127 - cut_off
+            #Set indices for full image
+            ranges[3] = dim2-1
+            
+        if ranges[4] < 0:
+            #Define offset for cropping mask
+            limZ1 = abs(ranges[4])
+            #Set indices for full image
+            ranges[4] = 0
+            
+        if ranges[5] > dim3-1:
+            #Define offset for cropping mask
+            cut_off = ranges[5]-(dim3-1)
+            limZ2 = 95 - cut_off
+            #Set indices for full image
+            ranges[5] = dim3-1
+
+        #Crop prediction
+        predictions = predictions[limX1:limX2+1,limY1:limY2+1,limZ1:limZ2+1]
+        full_output_temp[ranges[0]:ranges[1]+1,ranges[2]:ranges[3]+1,ranges[4]:ranges[5]+1] = predictions #Minus because we are transfering back!
+        
+        # show_mask_dim1(full_output_temp, str(idx))
+
+        
+        full_output_list.append(full_output_temp)
+        v_number_list.append(v_number)
+
+            
+        idx+=1
+    
+    # Convert the list of arrays into a single NumPy array
+    full_output_list = np.array(full_output_list)
+    
+    # Find the maximum values along the specified axis (axis=0 for elementwise comparison)
+    max_values = np.max(full_output_list, axis=0)
+    
+    # Create a mask indicating where the maximum values are above 0.5
+    mask = max_values > 0.5
+    
+    # Initialize an output array with zeros
+    final_prediction = np.zeros_like(max_values)
+    
+    # Assign values based on the conditions
+    for i in range(len(full_output_list)):
+        final_prediction[np.logical_and(mask, max_values == full_output_list[i])] = v_number_list[i]
+    
+    # show_mask_dim1(final_prediction, str(idx))
+
+
+
+
+
+    #CLEAN FOR SMALL ISOLATED BLOBS
+    mask = final_prediction
+    
+    binary_img = np.where(mask > 0,1,0)
+    blobs = cc3d.connected_components(binary_img,connectivity=6) #26, 18, and 6 (3D) are allowed
+    
+    no_unique= len(np.unique(blobs))
+    
+    # ## STOP HERE AND PLOT IN DEBUG MODE TO SEE BLOBS
+    # for i in range(blobs.shape[0]):
+    #     fig, ax = plt.subplots()
+    #     ax.imshow(blobs[i,:,:].T,cmap='jet',vmin=0, vmax=no_unique-1,origin="lower") #or cmap = 'viridis'
+    #     plt.show()
+    
+    for label in range(no_unique):
+        area = np.count_nonzero(blobs == label)
+        # print(area)
+        if area < 1000:
+            blobs[blobs==label] = 0
+            print("Small blob removed")
+            
+    mask[blobs==0] = 0
+    
+    data_msk_filtered = deepcopy(data_msk) #GT
+    data_msk_filtered[(data_msk_filtered < 17) | (data_msk_filtered > 24)] = 0
+    
+    # show_mask_img_filtered_dim1(data_img,mask,subject)
+    # show_mask_img_filtered_dim1(data_img,data_msk_filtered,subject)
+
+    # show_mask_filtered_dim1(mask,subject)
+    # show_mask_filtered_dim1(data_msk_filtered,subject)
+
+    
+    #Save segmentation
+    msk_nib_pred = nib.Nifti1Image(mask, img_nib.affine) #new_affine) #random_affine) #img_nib.affine) #DEFINE ANOTHER AFFINE!
+    nib.save(msk_nib_pred, os.path.join(dir_segmentations,subject+'_PREDICTION.nii.gz'))
+    msk_nib_GT = nib.Nifti1Image(data_msk_filtered, img_nib.affine) #new_affine) #random_affine) #img_nib.affine) #DEFINE ANOTHER AFFINE!
+    nib.save(msk_nib_GT, os.path.join(dir_segmentations,subject+'_GT.nii.gz'))
+    
+    print("Subject done")
+    # #Save centroids
+    # np.save(os.path.join(dir_centroids,subject+'-centroids.npy'), ctd_list)
+
+

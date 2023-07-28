@@ -1,0 +1,1 @@
+Filen Padding_specification er blot en fil, jeg skabte, fordi jeg havde brug for at genskabe padding detaljer for data, efter jeg lavede preprocessing. Har også tilføjet det til filen Rescale_and_reorient.py nu, så den burde tage højde for det og gemme det.
