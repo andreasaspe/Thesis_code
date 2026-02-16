@@ -4,7 +4,6 @@ __author__      = "Maximilian T. Löffler, Malek El Husseini"
 
 
 from pathlib import Path
-from numpy.core.numeric import NaN
 import numpy as np
 import nibabel as nib
 import nibabel.processing as nip
