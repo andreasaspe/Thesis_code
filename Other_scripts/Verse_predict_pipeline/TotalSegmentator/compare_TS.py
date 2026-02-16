@@ -2,6 +2,7 @@ import os
 import nibabel as nib
 from scipy import ndimage
 import numpy as np
+from tqdm import tqdm
 
 input_dir = "/storage/awias/s174197/data_Verse/Verse20_test_unpacked"
 TS_dir = "/storage/awias/s174197/data_Verse/TotalSegmentator"
@@ -32,10 +33,7 @@ for series in all_series:
     GT_nib = nib.load(GT_path)
     GT_data = GT_nib.get_fdata()
 
-    print(f"Unique labels in TS data for {series}: {np.unique(TS_data)}")
-
     TS_data[(TS_data < 26) | (TS_data > 50)] = 0
-
 
     # Get unique labels in RH data (excluding 0/background)
     verse_labels = np.unique(Verse_data)
@@ -53,7 +51,7 @@ for series in all_series:
     best_subject_dice_TS = []  # Store Dice scores for TS labels
 
     # For each RH label, find the best matching GT label
-    for verse_label in verse_labels:
+    for verse_label in tqdm(verse_labels):
         rh_mask = Verse_data == verse_label
         best_overlap = 0
         best_gt_label = None
@@ -73,7 +71,7 @@ for series in all_series:
             best_subject_dice_Verse.append(best_overlap)
 
     # For each TS label, find the best matching GT label
-    for ts_label in ts_labels:
+    for ts_label in tqdm(ts_labels):
         ts_mask = TS_data == ts_label
         best_overlap = 0
         best_gt_label = None
