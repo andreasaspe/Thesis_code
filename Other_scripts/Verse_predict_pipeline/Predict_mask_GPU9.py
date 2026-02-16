@@ -635,3 +635,16 @@ for subject in tqdm(all_subjects):
     msk_nib_GT = nib.Nifti1Image(data_msk_filtered, img_nib.affine) #new_affine) #random_affine) #img_nib.affine) #DEFINE ANOTHER AFFINE!
     nib.save(msk_nib_GT, os.path.join(dir_FULL_SEGMENTATIONS_GT,subject+'_GT.nii.gz'))
 
+
+    from nibabel.processing import resample_from_to
+
+    pred_resampled = resample_from_to(
+        msk_nib_pred,
+        img_nib_original,
+        order=0  # IMPORTANT → nearest neighbour for labels
+    )
+
+    #Save segmentation
+    new_outputdir = os.path.join(os.path.dirname(dir_FULL_SEGMENTATIONS_after), 'test_resampled')
+    os.makedirs(new_outputdir, exist_ok=True)
+    nib.save(pred_resampled, os.path.join(new_outputdir, subject+'_PREDICTIONafter.nii.gz'))
